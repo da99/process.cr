@@ -1,0 +1,7 @@
+name: process
+version: 0.0.0
+dependencies:
+  da_spec:
+    github: da99/da_spec.cr
+  shell_out:
+    github: da99/shell_out
