@@ -6,14 +6,23 @@ class Inotify_Wait
   # Class
   # =============================================================================
 
-  def self.run(*args, &blok : Proc(Change, Nil))
+  def self.loop(*args, &blok : Proc(Inotify_Wait, Change, Nil))
     i = new(*args, &blok)
+
+    STDERR.puts "=== inotifywait #{i.cmd}"
+
     Signal::INT.trap do
-      puts "killing: 0"
-      exit 0
+      i.kill unless i.terminated?
+      Signal::INT.reset
     end
-    i.loop
-    i
+
+    while !i.terminated?
+      i.process_a_line
+      Fiber.yield
+    end
+
+    i.flush_remaining
+    i.exit_on_error
   end
 
   # =============================================================================
@@ -21,21 +30,19 @@ class Inotify_Wait
   # =============================================================================
 
   getter proc   : Process
-  getter blok   : Proc(Change, Nil)
+  getter blok   : Proc(Inotify_Wait, Change, Nil)
   getter out_io : IO::Memory = IO::Memory.new
   getter cmd : String
 
-  def initialize(@cmd : String = "-m -r ./ -e close_write", &blok : Proc(Change, Nil))
+  delegate :terminated?, to: @proc
+
+  def initialize(@cmd : String = "-m -r ./ -e close_write", &@blok : Proc(Inotify_Wait, Change, Nil))
     @proc = Process.new(
       "inotifywait",
       @cmd.split,
       output: @out_io,
       error: STDERR
     )
-    if @proc.terminated?
-      exit 2
-    end
-    @blok = blok
   end
 
   def kill
@@ -45,34 +52,33 @@ class Inotify_Wait
     end
   end
 
-  def gets_to_end
+  def exit_on_error
+    stat = proc.wait
+    if stat.normal_exit? && !stat.success?
+      exit stat.exit_code
+    end
+    stat
+  end
+
+  def flush_remaining
     return if out_io.empty?
     out_io.rewind
     puts out_io.gets_to_end
   end
 
-  def loop
-    at_exit { kill }
-    STDERR.puts "=== inotifywait #{cmd}"
-    loop {
-      if !out_io.empty?
-        out_io.rewind
-        out_io.each_line { |l|
-          @blok.call Change.new(l)
-        }
-      end
+  def process_a_line
+    change = nil
+    if !out_io.empty?
+      out_io.rewind
+      out_io.each_line { |l|
+        change = Change.new(l)
+        @blok.call self, change
+      }
+    end
 
-      out_io.clear
-      if proc.terminated?
-        gets_to_end
-        break
-      end
-
-      sleep 0.1
-    }
-    stat = proc.wait
-    exit stat.exit_code if stat.normal_exit?
-  end
+    out_io.clear
+    change
+  end # === def process_a_line
 
   struct Change
 
@@ -112,10 +118,5 @@ class Inotify_Wait
   end # === struct Change
 
 end # === class Inotify
-
-Inotify_Wait.run(ARGV.join(" ")) do |change|
-  puts "#{change.full_path} #{change.event_name} #{change.different?}"
-  Process.run("uptime", output: STDOUT)
-end
 
 
