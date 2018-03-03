@@ -1,6 +1,9 @@
 name: process
 version: 0.0.0
 dependencies:
+  shell_out:
+    github: da99/shell_out
+development_dependencies:
   inspect_bang:
     github: da99/inspect_bang.cr
   da_spec:
